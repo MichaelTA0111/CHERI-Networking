@@ -18,11 +18,12 @@
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 32
+#define BURST_SIZE 13400
 
 static int hwts_dynfield_offset = -1;
 static int overrun_read = 0;
 static int attempt_write = 0;
+static int use_ipc = 0;
 
 static inline rte_mbuf_timestamp_t *
 hwts_field(struct rte_mbuf *mbuf)
@@ -40,8 +41,15 @@ tsc_field(struct rte_mbuf *mbuf)
 	return RTE_MBUF_DYNFIELD(mbuf, tsc_dynfield_offset, tsc_t *);
 }
 
+static const char short_opts[] =
+	"x"	/* Read only */
+	"y"	/* Buffer overflow */
+	"z"	/* Execute */
+	"i"	/* Use IPC model */
+	;
+
 static const char usage[] =
-	"%s EAL_ARGS -- [-x Read Only] [-y Buffer Overflow] [-z Execute] \n";
+	"%s EAL_ARGS -- [-x Read Only] [-y Buffer Overflow] [-z Execute] [-i Use IPC Model] \n";
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
@@ -290,6 +298,13 @@ lcore_main(void)
 				for (j = 0; j < read_len; j++) {
 					printf("%02X ", c[bufs[i]->data_off + j]);
 				}
+				printf("\n");
+			}
+
+			if (nb_rx) {
+				uint16_t buf;
+				for (buf = 0; buf < nb_rx; buf++)
+					rte_pktmbuf_free(bufs[buf]);
 			}
 		}
 	}
@@ -304,11 +319,13 @@ main(int argc, char *argv[])
 	uint16_t portid;
 	struct option lgopts[] = {
 		{ NULL,         no_argument,    0,       0 },
-		{ "ReadOnly",   no_argument,    NULL,    'x'},
-		{ "Overflow",   no_argument,    NULL,    'y'},
-		{ "Execute",    no_argument,    NULL,    'z'}
+		{ "ReadOnly",   no_argument,    NULL,    'x' },
+		{ "Overflow",   no_argument,    NULL,    'y' },
+		{ "Execute",    no_argument,    NULL,    'z' },
+		{ "IPC",        no_argument,    NULL,    'i' },
 	};
 	int opt, option_index;
+
 	char *do_write = getenv("PYTILIA_ATTEMPT_WRITE");
 	if (do_write && (strcasecmp(do_write, "yes") == 0)) {
 		printf("Attempt write ...\n");
@@ -317,7 +334,6 @@ main(int argc, char *argv[])
 		printf("Don't attempt write ...\n");
 	}
 
-
 	char *overrun = getenv("PYTILIA_READ_OVERRUN");
 	if (overrun && (strcasecmp(overrun, "yes") == 0)) {
 		printf("Enabling overrun ...\n");
@@ -325,6 +341,16 @@ main(int argc, char *argv[])
 	} else {
 		printf("Disabling overrun ...\n");
 	}
+
+	char *ipc = getenv("PYTILIA_IPC");
+	if (ipc && (strcasecmp(ipc, "yes") == 0)) {
+		printf("Use traditional IPC model ...\n");
+		use_ipc = 1;
+	} else {
+		printf("Use CHERI capabilities ...\n");
+	}
+
+
 	static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
 		.name = "example_bbdev_dynfield_tsc",
 		.size = sizeof(tsc_t),
@@ -338,7 +364,7 @@ main(int argc, char *argv[])
 	argc -= ret;
 	argv += ret;
 
-	while ((opt = getopt_long(argc, argv, "xyz", lgopts, &option_index))
+	while ((opt = getopt_long(argc, argv, short_opts, lgopts, &option_index))
 			!= EOF)
 		switch (opt) {
 		case 'x':
@@ -351,7 +377,11 @@ main(int argc, char *argv[])
 			break;
 		case 'z':
 		/** Execute Path **/
-			printf("Execute Not implemented!");
+			printf("Execute Not Implemented!\n");
+			break;
+		case 'i':
+		/** IPC Path **/
+			printf("IPC Path!\n");
 			break;
 		default:
 			printf(usage, argv[0]);
@@ -363,7 +393,7 @@ main(int argc, char *argv[])
 	printf("Port count %u\n", nb_ports);
 
 	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL",
-		16, MBUF_CACHE_SIZE, 0,
+		13400, MBUF_CACHE_SIZE, 0,
 		RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 	if (mbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
