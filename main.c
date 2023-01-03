@@ -12,130 +12,41 @@
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_dyn.h>
+#include <sys/socket.h>
+#include <netdb.h>
 
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 13400
-#define SERVERPORT "4950"    // the port users will be connecting to
+#define BURST_SIZE 10000
+#define SERVERPORT "4950"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-
-
-static int hwts_dynfield_offset = -1;
-static int overrun_read = 0;
-static int attempt_write = 0;
-static int use_ipc = 0;
+static int process_type = 0;
+static int bounds_error = 0;
+static int permissions_error = 0;
 
 struct addrinfo *servinfo, *p;
-
-static inline rte_mbuf_timestamp_t *
-hwts_field(struct rte_mbuf *mbuf)
-{
-	return RTE_MBUF_DYNFIELD(mbuf,
-			hwts_dynfield_offset, rte_mbuf_timestamp_t *);
-}
 
 typedef uint64_t tsc_t;
 static int tsc_dynfield_offset = -1;
 
-static inline tsc_t *
-tsc_field(struct rte_mbuf *mbuf)
-{
-	return RTE_MBUF_DYNFIELD(mbuf, tsc_dynfield_offset, tsc_t *);
-}
-
 static const char short_opts[] =
-	"x"	/* Read only */
-	"y"	/* Buffer overflow */
-	"z"	/* Execute */
+	"s"	/* Use single CHERI secured process */
 	"i"	/* Use IPC model */
+	"x"	/* Raise capability bounds error */
+	"y"	/* Raise capability permissions error */
 	;
 
 static const char usage[] =
-	"%s EAL_ARGS -- [-x Read Only] [-y Buffer Overflow] [-z Execute] [-i Use IPC Model] \n";
+	"%s EAL_ARGS -- [-s Single Process] [-i Inter Process] [-x Bounds Error] [-y Permissions Error] \n";
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
 	},
 };
-
-static struct {
-	uint64_t total_cycles;
-	uint64_t total_queue_cycles;
-	uint64_t total_pkts;
-} latency_numbers;
-
-static int hw_timestamping;
-
-#define TICKS_PER_CYCLE_SHIFT 16
-static uint64_t ticks_per_cycle_mult;
-
-static uint16_t
-add_timestamps(uint16_t port __rte_unused, uint16_t qidx __rte_unused,
-		struct rte_mbuf **pkts, uint16_t nb_pkts,
-		uint16_t max_pkts __rte_unused, void *_ __rte_unused)
-{
-	unsigned i;
-	uint64_t now = rte_rdtsc();
-
-	for (i = 0; i < nb_pkts; i++)
-		*tsc_field(pkts[i]) = now;
-	return nb_pkts;
-}
-
-static uint16_t
-calc_latency(uint16_t port, uint16_t qidx __rte_unused,
-		struct rte_mbuf **pkts, uint16_t nb_pkts, void *_ __rte_unused)
-{
-	uint64_t cycles = 0;
-	uint64_t queue_ticks = 0;
-	uint64_t now = rte_rdtsc();
-	uint64_t ticks;
-	unsigned i;
-
-	if (hw_timestamping)
-		rte_eth_read_clock(port, &ticks);
-
-	for (i = 0; i < nb_pkts; i++) {
-		cycles += now - *tsc_field(pkts[i]);
-		if (hw_timestamping)
-			queue_ticks += ticks - *hwts_field(pkts[i]);
-	}
-
-	latency_numbers.total_cycles += cycles;
-	if (hw_timestamping)
-		latency_numbers.total_queue_cycles += (queue_ticks
-			* ticks_per_cycle_mult) >> TICKS_PER_CYCLE_SHIFT;
-
-	latency_numbers.total_pkts += nb_pkts;
-
-	if (latency_numbers.total_pkts > (100 * 1000 * 1000ULL)) {
-		printf("Latency = %"PRIu64" cycles\n",
-		latency_numbers.total_cycles / latency_numbers.total_pkts);
-		if (hw_timestamping) {
-			printf("Latency from HW = %"PRIu64" cycles\n",
-			   latency_numbers.total_queue_cycles
-			   / latency_numbers.total_pkts);
-		}
-		latency_numbers.total_cycles = 0;
-		latency_numbers.total_queue_cycles = 0;
-		latency_numbers.total_pkts = 0;
-	}
-	return nb_pkts;
-}
 
 /*
  * Initialises a given port using global settings and with the rx buffers
@@ -169,20 +80,6 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 		port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
 
-	if (hw_timestamping) {
-		if (!(dev_info.rx_offload_capa & DEV_RX_OFFLOAD_TIMESTAMP)) {
-			printf("\nERROR: Port %u does not support hardware timestamping\n"
-					, port);
-			return -1;
-		}
-		port_conf.rxmode.offloads |= DEV_RX_OFFLOAD_TIMESTAMP;
-		rte_mbuf_dyn_rx_timestamp_register(&hwts_dynfield_offset, NULL);
-		if (hwts_dynfield_offset < 0) {
-			printf("ERROR: Failed to register timestamp field\n\n");
-			return -rte_errno;
-		}
-	}
-
 	retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
 	if (retval != 0)
 		return retval;
@@ -213,29 +110,6 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	if (retval < 0)
 		return retval;
 
-	if (hw_timestamping && ticks_per_cycle_mult  == 0) {
-		uint64_t cycles_base = rte_rdtsc();
-		uint64_t ticks_base;
-		retval = rte_eth_read_clock(port, &ticks_base);
-		if (retval != 0)
-			return retval;
-		rte_delay_ms(100);
-		uint64_t cycles = rte_rdtsc();
-		uint64_t ticks;
-		rte_eth_read_clock(port, &ticks);
-		uint64_t c_freq = cycles - cycles_base;
-		uint64_t t_freq = ticks - ticks_base;
-		double freq_mult = (double)c_freq / t_freq;
-		printf("TSC Freq ~= %" PRIu64
-				"\nHW Freq ~= %" PRIu64
-				"\nRatio : %f\n",
-				c_freq * 10, t_freq * 10, freq_mult);
-		/* TSC will be faster than internal ticks so freq_mult is > 0
-		 * We convert the multiplication to an integer shift & mult
-		 */
-		ticks_per_cycle_mult = (1 << TICKS_PER_CYCLE_SHIFT) / freq_mult;
-	}
-
 	struct rte_ether_addr addr;
 
 	retval = rte_eth_macaddr_get(port, &addr);
@@ -255,44 +129,40 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	if (retval != 0)
 		return retval;
 
-	rte_eth_add_rx_callback(port, 0, add_timestamps, NULL);
-	rte_eth_add_tx_callback(port, 0, calc_latency, NULL);
-
 	return 0;
 }
 
-int create_socket() {
-    int sockfd;
-    struct addrinfo hints;
-    int rv;
-    int numbytes;
+static int
+create_socket() {
+	int sockfd;
+	struct addrinfo hints;
+	int rv;
 
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
-    hints.ai_socktype = SOCK_DGRAM;
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
+	hints.ai_socktype = SOCK_DGRAM;
 
-    if ((rv = getaddrinfo("localhost", SERVERPORT, &hints, &servinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        return 1;
-    }
+	if ((rv = getaddrinfo("localhost", SERVERPORT, &hints, &servinfo)) != 0) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+		return -1;
+	}
 
-    // loop through all the results and make a socket
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
-            perror("talker: socket");
-            continue;
-        }
+	// loop through all the results and make a socket
+	for(p = servinfo; p != NULL; p = p->ai_next) {
+		if ((sockfd = socket(p->ai_family, p->ai_socktype,
+				p->ai_protocol)) == -1) {
+			perror("talker: socket");
+			continue;
+		}
+		break;
+	}
 
-        break;
-    }
+	if (p == NULL) {
+		fprintf(stderr, "talker: failed to create socket\n");
+		return -1;
+	}
 
-    if (p == NULL) {
-        fprintf(stderr, "talker: failed to create socket\n");
-        return 2;
-    }
-
-    return sockfd;
+	return sockfd;
 }
 
 /*
@@ -313,10 +183,11 @@ lcore_main(void)
 					"polling thread.\n\tPerformance will "
 					"not be optimal.\n", port);
 
-	printf("\nCore %u forwarding packets. [Ctrl+C to quit]\n",
-			rte_lcore_id());
+	printf("\nCore %u forwarding packets.\n", rte_lcore_id());
 
-	sockfd = create_socket();
+	if ((sockfd = create_socket()) < 0)
+		printf("Error creating socket!\n");
+		return;
 	
 	for (;;) {
 		RTE_ETH_FOREACH_DEV(port) {
@@ -330,62 +201,60 @@ lcore_main(void)
 			int i;
 			for (i = 0; i < nb_rx; i++) {
 				size_t read_len =  rte_pktmbuf_pkt_len(bufs[i]);
-				printf("== buffer %d, length %u %p %p==\n", i, read_len, bufs[i], bufs[i]->buf_addr);
-				printf("0x%lX %p %u\n", cheri_getperm(bufs[i]->buf_addr),
+				printf("\nBuffer %d: Address %p, Length %u\n", i, read_len, bufs[i]);
+				printf("Capability: Permissions 0x%lX, Address %p, Length %u\n",
+						cheri_getperm(bufs[i]->buf_addr),
 						bufs[i]->buf_addr,
 						cheri_getlen(bufs[i]->buf_addr));
 				char *c;
-				int j;
-				/* To run capability permissions fault demonstration */
-				if (attempt_write) {
-					c = bufs[i]->buf_addr;
+				int j, k = 0;
+
+				c = bufs[i]->buf_addr;
+
+				// Raise a permissions error
+				if (permissions_error) {
+					printf("Attempting to write to read-only permissions.\n");
+					c = cheri_andperm(c, ~CHERI_PERM_STORE);
 					*c = 0xFE;
 				}
-				rte_pktmbuf_dump(stdout, bufs[i], read_len);
-				/* To run capability bounds fault demonstration */
-				if (overrun_read) {
+
+				// Raise a bounds error
+				if (bounds_error) {
+					c = bufs[i]->buf_addr;
+					printf("Attempting to read beyond the capability bounds.\n");
 					read_len += 128;
+					for (j = 0; j < read_len; j++) {
+						printf("%02X ", c[bufs[i]->data_off + j]);
+						k++;
+						if (k == 16) {
+							printf("\n");
+							k = 0;
+						}
+					}
+				} else {
+					rte_pktmbuf_dump(stdout, bufs[i], read_len);
 				}
-				c = bufs[i]->buf_addr;
-				printf("==================");
-				for (j = 0; j < read_len; j++) {
-					printf("%02X ", c[bufs[i]->data_off + j]);
-				}
-				printf("\n");
 
 				int numbytes;
 				if ((numbytes = sendto(sockfd, &c[bufs[i]->data_off], read_len, 0,
 						p->ai_addr, p->ai_addrlen)) == -1) {
-					perror("talker: sendto");
+					perror("Error with sendto command");
 					exit(1);
 				}
 
-				// freeaddrinfo(servinfo);
-
-				printf("talker: sent %d bytes to localhost\n", numbytes);
+				printf("Sent %d bytes to localhost.\n", numbytes);
 			}
-
-			/*
-			if (unlikely(nb_rx == 0))
-                                continue;
-                        const uint16_t nb_tx = rte_eth_tx_burst(port ^ 1, 0,
-                                        bufs, nb_rx);
-                        if (unlikely(nb_tx < nb_rx)) {
-                                uint16_t buf;
-
-                                for (buf = nb_tx; buf < nb_rx; buf++)
-                                        rte_pktmbuf_free(bufs[buf]);
-                        }
-			*/
 
 			if (nb_rx) {
 				uint16_t buf;
 				for (buf = 0; buf < nb_rx; buf++)
 					rte_pktmbuf_free(bufs[buf]);
 			}
-
 		}
 	}
+
+	// TODO: Add a way to naturally end the program after reading in all from the pcap file
+	freeaddrinfo(servinfo);
 }
 
 /* Main function, does initialisation and calls the per-lcore functions */
@@ -393,49 +262,51 @@ int
 main(int argc, char *argv[])
 {
 	struct rte_mempool *mbuf_pool;
-	uint16_t nb_ports;
-	uint16_t portid;
+	uint16_t nb_ports, portid;
 	struct option lgopts[] = {
 		{ NULL,         no_argument,    0,       0 },
-		{ "ReadOnly",   no_argument,    NULL,    'x' },
-		{ "Overflow",   no_argument,    NULL,    'y' },
-		{ "Execute",    no_argument,    NULL,    'z' },
-		{ "IPC",        no_argument,    NULL,    'i' },
+		{ "SingleProc", no_argument,    NULL,    's' },
+		{ "InterProc",  no_argument,    NULL,    'i' },
+		{ "Bounds",     no_argument,    NULL,    'x' },
+		{ "Permissions",no_argument,    NULL,    'y' },
+		{ "HWTS",       no_argument,    NULL,    't' },
 	};
 	int opt, option_index;
 
-	char *do_write = getenv("PYTILIA_ATTEMPT_WRITE");
-	if (do_write && (strcasecmp(do_write, "yes") == 0)) {
-		printf("Attempt write ...\n");
-		attempt_write = 1;
-	} else {
-		printf("Don't attempt write ...\n");
+	char *single_proc = getenv("PYTILIA_SINGLE_PROCESS");
+	if (single_proc && (strcasecmp(single_proc, "yes") == 0)) {
+		printf("Use single process.\n");
+		process_type = 1;
 	}
 
-	char *overrun = getenv("PYTILIA_READ_OVERRUN");
-	if (overrun && (strcasecmp(overrun, "yes") == 0)) {
-		printf("Enabling overrun ...\n");
-		overrun_read = 1;
-	} else {
-		printf("Disabling overrun ...\n");
+	char *inter_proc = getenv("PYTILIA_INTER_PROCESS");
+	if (inter_proc && (strcasecmp(inter_proc, "yes") == 0)) {
+		if (process_type)
+			printf("WARNING! Overwriting process type!\n");
+
+		printf("Use inter process communications.\n");
+		process_type = 2;
 	}
 
-	char *ipc = getenv("PYTILIA_IPC");
-	if (ipc && (strcasecmp(ipc, "yes") == 0)) {
-		printf("Use traditional IPC model ...\n");
-		use_ipc = 1;
-	} else {
-		printf("Use CHERI capabilities ...\n");
+	char *bounds = getenv("PYTILIA_BOUNDS_ERROR");
+	if (bounds && (strcasecmp(bounds, "yes") == 0)) {
+		printf("Raise a capability bounds error.\n");
+		bounds_error = 1;
 	}
 
+	char *permissions = getenv("PYTILIA_PERMISSIONS_ERROR");
+	if (permissions && (strcasecmp(permissions, "yes") == 0)) {
+		printf("Raise a capability permissions error.\n");
+		permissions_error = 1;
+	}
 
 	static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
 		.name = "example_bbdev_dynfield_tsc",
 		.size = sizeof(tsc_t),
 		.align = __alignof__(tsc_t),
 	};
-	/* init EAL */
 
+	/* init EAL */
 	int ret = rte_eal_init(argc, argv);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
@@ -445,21 +316,31 @@ main(int argc, char *argv[])
 	while ((opt = getopt_long(argc, argv, short_opts, lgopts, &option_index))
 			!= EOF)
 		switch (opt) {
-		case 'x':
-		/** Read Only Permissions Applied **/
-			attempt_write = 1;
-			break;
-		case 'y':
-		/** Overflow Path **/
-			overrun_read = 1;
-			break;
-		case 'z':
-		/** Execute Path **/
-			printf("Execute Not Implemented!\n");
+		case 's':
+		/** Single Process **/
+			if (process_type)
+				printf("WARNING! Overwriting process type!\n");
+
+			printf("Use single process.\n");
+			process_type = 1;
 			break;
 		case 'i':
-		/** IPC Path **/
-			printf("IPC Path!\n");
+		/** Inter Process **/
+			if (process_type)
+				printf("WARNING! Overwriting process type!\n");
+
+			printf("Use inter process communications.\n");
+			process_type = 2;
+			break;
+		case 'x':
+		/** Bounds Error **/
+			printf("Raise a capability bounds error.\n");
+			bounds_error = 1;
+			break;
+		case 'y':
+		/** Permissions Error **/
+			printf("Raise a capability permissions error.\n");
+			permissions_error = 1;
 			break;
 		default:
 			printf(usage, argv[0]);
@@ -488,7 +369,7 @@ main(int argc, char *argv[])
 					portid);
 
 	if (rte_lcore_count() > 1)
-		printf("\nWARNING: Too much enabled lcores - "
+		printf("\nWARNING: Too many enabled lcores - "
 			"App uses only 1 lcore\n");
 
 	/* call lcore_main on main core only */
