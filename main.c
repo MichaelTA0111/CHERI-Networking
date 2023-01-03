@@ -19,11 +19,26 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 13400
+#define SERVERPORT "4950"    // the port users will be connecting to
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+
 
 static int hwts_dynfield_offset = -1;
 static int overrun_read = 0;
 static int attempt_write = 0;
 static int use_ipc = 0;
+
+struct addrinfo *servinfo, *p;
 
 static inline rte_mbuf_timestamp_t *
 hwts_field(struct rte_mbuf *mbuf)
@@ -246,6 +261,40 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	return 0;
 }
 
+int create_socket() {
+    int sockfd;
+    struct addrinfo hints;
+    int rv;
+    int numbytes;
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
+    hints.ai_socktype = SOCK_DGRAM;
+
+    if ((rv = getaddrinfo("localhost", SERVERPORT, &hints, &servinfo)) != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        return 1;
+    }
+
+    // loop through all the results and make a socket
+    for(p = servinfo; p != NULL; p = p->ai_next) {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype,
+                p->ai_protocol)) == -1) {
+            perror("talker: socket");
+            continue;
+        }
+
+        break;
+    }
+
+    if (p == NULL) {
+        fprintf(stderr, "talker: failed to create socket\n");
+        return 2;
+    }
+
+    return sockfd;
+}
+
 /*
  * Main thread that does the work, reading from INPUT_PORT
  * and writing to OUTPUT_PORT
@@ -254,6 +303,7 @@ static  __rte_noreturn void
 lcore_main(void)
 {
 	uint16_t port;
+	int sockfd;
 
 	RTE_ETH_FOREACH_DEV(port)
 		if (rte_eth_dev_socket_id(port) > 0 &&
@@ -265,6 +315,9 @@ lcore_main(void)
 
 	printf("\nCore %u forwarding packets. [Ctrl+C to quit]\n",
 			rte_lcore_id());
+
+	sockfd = create_socket();
+	
 	for (;;) {
 		RTE_ETH_FOREACH_DEV(port) {
 			struct rte_mbuf *bufs[BURST_SIZE];
@@ -299,13 +352,38 @@ lcore_main(void)
 					printf("%02X ", c[bufs[i]->data_off + j]);
 				}
 				printf("\n");
+
+				int numbytes;
+				if ((numbytes = sendto(sockfd, &c[bufs[i]->data_off], read_len, 0,
+						p->ai_addr, p->ai_addrlen)) == -1) {
+					perror("talker: sendto");
+					exit(1);
+				}
+
+				// freeaddrinfo(servinfo);
+
+				printf("talker: sent %d bytes to localhost\n", numbytes);
 			}
+
+			/*
+			if (unlikely(nb_rx == 0))
+                                continue;
+                        const uint16_t nb_tx = rte_eth_tx_burst(port ^ 1, 0,
+                                        bufs, nb_rx);
+                        if (unlikely(nb_tx < nb_rx)) {
+                                uint16_t buf;
+
+                                for (buf = nb_tx; buf < nb_rx; buf++)
+                                        rte_pktmbuf_free(bufs[buf]);
+                        }
+			*/
 
 			if (nb_rx) {
 				uint16_t buf;
 				for (buf = 0; buf < nb_rx; buf++)
 					rte_pktmbuf_free(bufs[buf]);
 			}
+
 		}
 	}
 }
