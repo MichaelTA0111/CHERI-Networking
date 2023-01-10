@@ -23,9 +23,12 @@
 #define BURST_SIZE 10000
 #define SERVERPORT "4950"
 
-static int process_type = 0;
-static int bounds_error = 0;
-static int permissions_error = 0;
+
+static struct {
+	int process_type;
+	int bounds_error;
+	int permissions_error;
+} app_opts;
 
 struct addrinfo *servinfo, *p;
 
@@ -185,9 +188,10 @@ lcore_main(void)
 
 	printf("\nCore %u forwarding packets.\n", rte_lcore_id());
 
-	if ((sockfd = create_socket()) < 0)
+	if ((sockfd = create_socket()) < 0) {
 		printf("Error creating socket!\n");
 		return;
+	}
 	
 	for (;;) {
 		RTE_ETH_FOREACH_DEV(port) {
@@ -212,14 +216,14 @@ lcore_main(void)
 				c = bufs[i]->buf_addr;
 
 				// Raise a permissions error
-				if (permissions_error) {
+				if (app_opts.permissions_error) {
 					printf("Attempting to write to read-only permissions.\n");
 					c = cheri_andperm(c, ~CHERI_PERM_STORE);
 					*c = 0xFE;
 				}
 
 				// Raise a bounds error
-				if (bounds_error) {
+				if (app_opts.bounds_error) {
 					c = bufs[i]->buf_addr;
 					printf("Attempting to read beyond the capability bounds.\n");
 					read_len += 128;
@@ -276,28 +280,28 @@ main(int argc, char *argv[])
 	char *single_proc = getenv("PYTILIA_SINGLE_PROCESS");
 	if (single_proc && (strcasecmp(single_proc, "yes") == 0)) {
 		printf("Use single process.\n");
-		process_type = 1;
+		app_opts.process_type = 1;
 	}
 
 	char *inter_proc = getenv("PYTILIA_INTER_PROCESS");
 	if (inter_proc && (strcasecmp(inter_proc, "yes") == 0)) {
-		if (process_type)
+		if (app_opts.process_type)
 			printf("WARNING! Overwriting process type!\n");
 
 		printf("Use inter process communications.\n");
-		process_type = 2;
+		app_opts.process_type = 2;
 	}
 
 	char *bounds = getenv("PYTILIA_BOUNDS_ERROR");
 	if (bounds && (strcasecmp(bounds, "yes") == 0)) {
 		printf("Raise a capability bounds error.\n");
-		bounds_error = 1;
+		app_opts.bounds_error = 1;
 	}
 
 	char *permissions = getenv("PYTILIA_PERMISSIONS_ERROR");
 	if (permissions && (strcasecmp(permissions, "yes") == 0)) {
 		printf("Raise a capability permissions error.\n");
-		permissions_error = 1;
+		app_opts.permissions_error = 1;
 	}
 
 	static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
@@ -318,29 +322,29 @@ main(int argc, char *argv[])
 		switch (opt) {
 		case 's':
 		/** Single Process **/
-			if (process_type)
+			if (app_opts.process_type)
 				printf("WARNING! Overwriting process type!\n");
 
 			printf("Use single process.\n");
-			process_type = 1;
+			app_opts.process_type = 1;
 			break;
 		case 'i':
 		/** Inter Process **/
-			if (process_type)
+			if (app_opts.process_type)
 				printf("WARNING! Overwriting process type!\n");
 
 			printf("Use inter process communications.\n");
-			process_type = 2;
+			app_opts.process_type = 2;
 			break;
 		case 'x':
 		/** Bounds Error **/
 			printf("Raise a capability bounds error.\n");
-			bounds_error = 1;
+			app_opts.bounds_error = 1;
 			break;
 		case 'y':
 		/** Permissions Error **/
 			printf("Raise a capability permissions error.\n");
-			permissions_error = 1;
+			app_opts.permissions_error = 1;
 			break;
 		default:
 			printf(usage, argv[0]);
