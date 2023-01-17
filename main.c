@@ -15,14 +15,20 @@
 #include <sys/socket.h>
 #include <netdb.h>
 
+#include "consumer.h"
+
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 10000
-#define SERVERPORT "4950"
 
+#define PORT_1 "5000"
+#define PORT_2 "5001"
+
+
+//void process_packet()
 
 static struct {
     int process_type;
@@ -30,7 +36,8 @@ static struct {
     int permissions_error;
 } app_opts;
 
-struct addrinfo *servinfo, *p;
+struct addrinfo *servinfo, *p1, *p2;
+Consumer *cons_odd, *cons_even;
 
 typedef uint64_t tsc_t;
 static int tsc_dynfield_offset = -1;
@@ -137,12 +144,12 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 }
 
 /*
- * Create a network socket to allow for 
+ * Create a network socket 
  */
 static int
-create_socket() {
+create_socket(const char *port, struct addrinfo **p) {
     int sockfd;
-    struct addrinfo hints;
+    struct addrinfo hints, *q;
     int rv;
 
     // Create a hints struct
@@ -150,25 +157,28 @@ create_socket() {
     hints.ai_family = AF_INET6;
     hints.ai_socktype = SOCK_DGRAM;
 
-    if ((rv = getaddrinfo("localhost", SERVERPORT, &hints, &servinfo)) != 0) {
+    if ((rv = getaddrinfo("localhost", port, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         return -1;
     }
 
     // loop through all the results and make a socket
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
+    for(q = servinfo; q != NULL; q = q->ai_next) {
+        if ((sockfd = socket(q->ai_family, q->ai_socktype,
+                q->ai_protocol)) == -1) {
             perror("Error creating socket");
             continue;
         }
         break;
     }
 
-    if (p == NULL) {
+    if (q == NULL) {
         fprintf(stderr, "Failed to create socket!\n");
         return -1;
     }
+
+    *p = q;
+    printf("p: %p\n", *p);
 
     return sockfd;
 }
@@ -181,7 +191,7 @@ static void
 lcore_main(void)
 {
     uint16_t port;
-    int sockfd;
+    int sockfd1, sockfd2;
 
     RTE_ETH_FOREACH_DEV(port)
         if (rte_eth_dev_socket_id(port) > 0 &&
@@ -191,11 +201,18 @@ lcore_main(void)
 
     printf("\nCore %u forwarding packets.\n", rte_lcore_id());
 
-    // Create a socket
-    if ((sockfd = create_socket()) < 0) {
-        printf("Error creating socket!\n");
+    // Create sockets
+    if ((sockfd1 = create_socket(PORT_1, &p1)) < 0) {
+        printf("Error creating socket 1!\n");
         return;
     }
+
+    if ((sockfd2 = create_socket(PORT_2, &p2)) < 0) {
+        printf("Error creating socket 2!\n");
+        return;
+    }
+
+    printf("p1: %p\np2: %p\n", p1, p2);
 
     // Loop through all of the packets received
     int loop;
@@ -234,14 +251,14 @@ lcore_main(void)
                 if (app_opts.permissions_error) {
                     printf("Attempting to write to read-only permissions.\n");
                     c = cheri_andperm(c, ~CHERI_PERM_STORE);
-                    *c = 0xFE; 
+                    *c = 0xFF; 
                 }
 
                 // Raise a bounds error
                 if (app_opts.bounds_error) {
                     c = bufs[i]->buf_addr;
                     printf("Attempting to read beyond capability bounds.\n");
-                    read_len += 128;
+                    read_len++;
 
                     // Manually read beyond the capability bounds
                     for (j = 0; j < read_len; j++) {
@@ -257,14 +274,40 @@ lcore_main(void)
                     rte_pktmbuf_dump(stdout, bufs[i], read_len);
                 }
 
-                int numbytes;
-                if ((numbytes = sendto(sockfd, &c[bufs[i]->data_off], read_len,
-                        0, p->ai_addr, p->ai_addrlen)) == -1) {
-                    perror("Error with sendto command");
-                    exit(1);
-                }
+                int odd_len;
+                odd_len = read_len % 2;
+                printf("read_len %u, odd_len %i\n", read_len, odd_len);
 
-                printf("Sent %d bytes to localhost.\n", numbytes);
+                if (app_opts.process_type == 1) {
+                    if (odd_len) {
+                        printf("Updating odd consumer.\n");
+                        consumer_increment_counter(&cons_odd);
+		    } else {
+                        printf("Updating even consumer.\n");
+                        consumer_increment_counter(&cons_even);
+                    }
+                } else if (app_opts.process_type == 2) {
+                    int numbytes;
+                    if (odd_len) {
+                        printf("Updating odd consumer.\n");
+                        if ((numbytes = sendto(sockfd1, &c[bufs[i]->data_off], read_len,
+                                0, p1->ai_addr, p1->ai_addrlen)) == -1) {
+                            perror("Error with sendto command");
+                            exit(1);
+                        }
+
+                        printf("Sent %d bytes to consumer 1.\n", numbytes);
+                    } else {
+                        printf("Updating even consumer.\n");
+			if ((numbytes = sendto(sockfd2, &c[bufs[i]->data_off], read_len,
+				0, p2->ai_addr, p2->ai_addrlen)) == -1) {
+			    perror("Error with sendto command");
+			    exit(1);
+			}
+
+			printf("Sent %d bytes to consumer 2.\n", numbytes);
+                    }
+		}
             }
 
             if (nb_rx) {
@@ -276,6 +319,12 @@ lcore_main(void)
     }
 
     freeaddrinfo(servinfo);
+
+    printf("Consumer 1:\n");
+    consumer_print_details(&cons_odd);
+    printf("Consumer 2:\n");
+    consumer_print_details(&cons_even);
+
     return;
 }
 
