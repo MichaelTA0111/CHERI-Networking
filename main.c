@@ -14,6 +14,8 @@
 #include <rte_mbuf_dyn.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <unistd.h>
+#include <math.h>
 
 #include "consumer.h"
 
@@ -173,7 +175,7 @@ create_socket(const char *port, struct addrinfo **p, int do_bind) {
         }
 
 	if (do_bind) {
-            if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+            if (bind(sockfd, q->ai_addr, q->ai_addrlen) == -1) {
                 close(sockfd);
                 perror("Error binding");
                 continue;
@@ -182,7 +184,7 @@ create_socket(const char *port, struct addrinfo **p, int do_bind) {
         break;
     }
 
-    if (r == NULL) {
+    if (q == NULL) {
 
         fprintf(stderr, "Failed to create socket!\n");
         return -1;
@@ -212,12 +214,12 @@ lcore_main(void)
     printf("\nCore %u forwarding packets.\n", rte_lcore_id());
 
     // Create sockets
-    if ((sockfd1 = create_socket(DST_PORT_1, &p1)) < 0) {
+    if ((sockfd1 = create_socket(DST_PORT_1, &p1, 0)) < 0) {
         printf("Error creating socket 1!\n");
         return;
     }
 
-    if ((sockfd2 = create_socket(DST_PORT_2, &p2)) < 0) {
+    if ((sockfd2 = create_socket(DST_PORT_2, &p2, 0)) < 0) {
         printf("Error creating socket 2!\n");
         return;
     }
@@ -251,7 +253,7 @@ lcore_main(void)
                         bufs[i]->buf_addr,
                         cheri_getlen(bufs[i]->buf_addr));
                 char *c;
-                unsigned int j, k = 0;
+                unsigned int j, k;
 
                 c = bufs[i]->buf_addr;
 
@@ -267,19 +269,23 @@ lcore_main(void)
                     c = bufs[i]->buf_addr;
                     printf("Attempting to read beyond capability bounds.\n");
                     read_len++;
+                }
 
-                    // Manually read beyond the capability bounds
-                    for (j = 0; j < read_len; j++) {
-                        printf("%02X ", c[bufs[i]->data_off + j]);
-                        k++;
-                        if (k == 16) {
-                            printf("\n");
-                            k = 0;
+                for (j = 0; j < ceil((double) read_len / 16.0); j++) {
+                    for (k = 0; k < 16; k++) {
+                        if (j*16+k < read_len) {
+                            printf("%02X ", c[bufs[i]->data_off + j*16+k]);
+                        } else {
+                            printf("   ");
                         }
                     }
-                } else {
-                    // Print the packet information
-                    rte_pktmbuf_dump(stdout, bufs[i], read_len);
+                    printf("| ");
+                    for (k = 0; k < 16; k++) {
+                        if (j*16+k < read_len) {
+                            printf("%c", c[bufs[i]->data_off + j*16+k]);
+                        }
+                    }
+                    printf("\n");
                 }
 
                 int odd_len;
