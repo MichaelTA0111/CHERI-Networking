@@ -24,8 +24,10 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 10000
 
-#define PORT_1 "5000"
-#define PORT_2 "5001"
+#define SRC_PORT_1 "4000"
+#define SRC_PORT_2 "4001"
+#define DST_PORT_1 "5000"
+#define DST_PORT_2 "5001"
 
 
 //void process_packet()
@@ -37,7 +39,7 @@ static struct {
 } app_opts;
 
 struct addrinfo *servinfo, *p1, *p2;
-Consumer *cons_odd, *cons_even;
+Consumer cons1, cons2;
 
 typedef uint64_t tsc_t;
 static int tsc_dynfield_offset = -1;
@@ -147,7 +149,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
  * Create a network socket 
  */
 static int
-create_socket(const char *port, struct addrinfo **p) {
+create_socket(const char *port, struct addrinfo **p, int do_bind) {
     int sockfd;
     struct addrinfo hints, *q;
     int rv;
@@ -169,16 +171,24 @@ create_socket(const char *port, struct addrinfo **p) {
             perror("Error creating socket");
             continue;
         }
+
+	if (do_bind) {
+            if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+                close(sockfd);
+                perror("Error binding");
+                continue;
+	    }	
+	}
         break;
     }
 
-    if (q == NULL) {
+    if (r == NULL) {
+
         fprintf(stderr, "Failed to create socket!\n");
         return -1;
     }
 
     *p = q;
-    printf("p: %p\n", *p);
 
     return sockfd;
 }
@@ -202,17 +212,15 @@ lcore_main(void)
     printf("\nCore %u forwarding packets.\n", rte_lcore_id());
 
     // Create sockets
-    if ((sockfd1 = create_socket(PORT_1, &p1)) < 0) {
+    if ((sockfd1 = create_socket(DST_PORT_1, &p1)) < 0) {
         printf("Error creating socket 1!\n");
         return;
     }
 
-    if ((sockfd2 = create_socket(PORT_2, &p2)) < 0) {
+    if ((sockfd2 = create_socket(DST_PORT_2, &p2)) < 0) {
         printf("Error creating socket 2!\n");
         return;
     }
-
-    printf("p1: %p\np2: %p\n", p1, p2);
 
     // Loop through all of the packets received
     int loop;
@@ -223,10 +231,10 @@ lcore_main(void)
             int i;
 
             // Stop looping once no packets remain
-            if (unlikely(nb_rx == 0)) {
+            if (unlikely(!nb_rx)) {
                 printf("Received all packets successfully!\n");
                 loop = 1;
-                continue;
+		break;
             }
 
             printf("Got %d packets\n", nb_rx);
@@ -234,16 +242,16 @@ lcore_main(void)
             // Iterate through each packet received
             for (i = 0; i < nb_rx; i++) {
                 size_t read_len =  rte_pktmbuf_pkt_len(bufs[i]);
-                printf("\nBuffer %d: Address %p, Length %u\n",
+                printf("\nBuffer %d: Address %p, Length %lu\n",
                         i,
                         bufs[i],
                         read_len);
-                printf("Capability: Permissions 0x%lX, Address %p, Length %u\n",
+                printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
                         cheri_getperm(bufs[i]->buf_addr),
                         bufs[i]->buf_addr,
                         cheri_getlen(bufs[i]->buf_addr));
                 char *c;
-                int j, k = 0;
+                unsigned int j, k = 0;
 
                 c = bufs[i]->buf_addr;
 
@@ -276,15 +284,15 @@ lcore_main(void)
 
                 int odd_len;
                 odd_len = read_len % 2;
-                printf("read_len %u, odd_len %i\n", read_len, odd_len);
+                printf("read_len %lu, odd_len %i\n", read_len, odd_len);
 
                 if (app_opts.process_type == 1) {
                     if (odd_len) {
                         printf("Updating odd consumer.\n");
-                        consumer_increment_counter(&cons_odd);
+                        consumer_increment_counter(&cons1);
 		    } else {
                         printf("Updating even consumer.\n");
-                        consumer_increment_counter(&cons_even);
+                        consumer_increment_counter(&cons2);
                     }
                 } else if (app_opts.process_type == 2) {
                     int numbytes;
@@ -318,12 +326,32 @@ lcore_main(void)
         }
     }
 
+    if (app_opts.process_type == 2) {
+        int numbytes;
+        const char *msg = "FINISHED";
+        printf("Closing consumer 1.\n");
+        if ((numbytes = sendto(sockfd1, msg, strlen(msg),
+                0, p1->ai_addr, p1->ai_addrlen)) == -1) {
+            perror("Error with sendto command");
+            exit(1);
+        }
+        printf("Sent %d bytes to consumer 1.\n", numbytes);
+
+        printf("Closing consumer 2.\n");
+        if ((numbytes = sendto(sockfd2, msg, strlen(msg),
+                0, p2->ai_addr, p2->ai_addrlen)) == -1) {
+            perror("Error with sendto command");
+            exit(1);
+        }
+        printf("Sent %d bytes to consumer 2.\n", numbytes);
+    }
+
     freeaddrinfo(servinfo);
 
     printf("Consumer 1:\n");
-    consumer_print_details(&cons_odd);
+    consumer_print_details(&cons1);
     printf("Consumer 2:\n");
-    consumer_print_details(&cons_even);
+    consumer_print_details(&cons2);
 
     return;
 }
