@@ -185,7 +185,6 @@ create_socket(const char *port, struct addrinfo **p, int do_bind) {
     }
 
     if (q == NULL) {
-
         fprintf(stderr, "Failed to create socket!\n");
         return -1;
     }
@@ -214,14 +213,16 @@ lcore_main(void)
     printf("\nCore %u forwarding packets.\n", rte_lcore_id());
 
     // Create sockets
-    if ((sockfd1 = create_socket(DST_PORT_1, &p1, 0)) < 0) {
-        printf("Error creating socket 1!\n");
-        return;
-    }
+    if (app_opts.process_type == 2) { 
+        if ((sockfd1 = create_socket(DST_PORT_1, &p1, 0)) < 0) {
+            printf("Error creating socket 1!\n");
+            return;
+        }
 
-    if ((sockfd2 = create_socket(DST_PORT_2, &p2, 0)) < 0) {
-        printf("Error creating socket 2!\n");
-        return;
+        if ((sockfd2 = create_socket(DST_PORT_2, &p2, 0)) < 0) {
+            printf("Error creating socket 2!\n");
+            return;
+        }
     }
 
     // Loop through all of the packets received
@@ -244,6 +245,9 @@ lcore_main(void)
             // Iterate through each packet received
             for (i = 0; i < nb_rx; i++) {
                 size_t read_len =  rte_pktmbuf_pkt_len(bufs[i]);
+                char *c = bufs[i]->buf_addr;
+                unsigned int j, k;
+
                 printf("\nBuffer %d: Address %p, Length %lu\n",
                         i,
                         bufs[i],
@@ -252,23 +256,21 @@ lcore_main(void)
                         cheri_getperm(bufs[i]->buf_addr),
                         bufs[i]->buf_addr,
                         cheri_getlen(bufs[i]->buf_addr));
-                char *c;
-                unsigned int j, k;
 
-                c = bufs[i]->buf_addr;
+                if (app_opts.process_type == 1) {
+                    // Raise a permissions error
+                    if (app_opts.permissions_error) {
+                        printf("Attempting to write to read-only permissions.\n");
+                        c = cheri_andperm(c, ~CHERI_PERM_STORE);
+                        *c = 0xFF; 
+                    }
 
-                // Raise a permissions error
-                if (app_opts.permissions_error) {
-                    printf("Attempting to write to read-only permissions.\n");
-                    c = cheri_andperm(c, ~CHERI_PERM_STORE);
-                    *c = 0xFF; 
-                }
-
-                // Raise a bounds error
-                if (app_opts.bounds_error) {
-                    c = bufs[i]->buf_addr;
-                    printf("Attempting to read beyond capability bounds.\n");
-                    read_len++;
+                    // Raise a bounds error
+                    if (app_opts.bounds_error) {
+                        c = bufs[i]->buf_addr;
+                        printf("Attempting to read beyond capability bounds.\n");
+                        read_len++;
+                    }
                 }
 
                 for (j = 0; j < ceil((double) read_len / 16.0); j++) {
@@ -288,10 +290,7 @@ lcore_main(void)
                     printf("\n");
                 }
 
-                int odd_len;
-                odd_len = read_len % 2;
-                printf("read_len %lu, odd_len %i\n", read_len, odd_len);
-
+                int odd_len = read_len % 2;
                 if (app_opts.process_type == 1) {
                     if (odd_len) {
                         printf("Updating odd consumer.\n");
@@ -332,7 +331,11 @@ lcore_main(void)
         }
     }
 
-    if (app_opts.process_type == 2) {
+    unsigned long counters[2];
+    if (app_opts.process_type == 1) {
+        counters[0] = cons1.counter;
+        counters[1] = cons2.counter;
+    } else if (app_opts.process_type == 2) {
         int numbytes;
         const char *msg = "FINISHED";
         struct sockaddr_storage their_addr;
@@ -362,7 +365,7 @@ lcore_main(void)
 
         buf[numbytes] = '\0';
         printf("%s\n", buf);
-	cons1.counter = atoi(buf);
+	counters[0] = atoi(buf);
 
         printf("Closing consumer 2.\n");
         if ((numbytes = sendto(sockfd2, msg, strlen(msg),
@@ -387,15 +390,13 @@ lcore_main(void)
 
         buf[numbytes] = '\0';
         printf("%s\n", buf);
-	cons2.counter = atoi(buf);
+	counters[1] = atoi(buf);
+
+        freeaddrinfo(servinfo);
     }
 
-    freeaddrinfo(servinfo);
-
-    printf("Consumer 1:\n");
-    consumer_print_details(&cons1);
-    printf("Consumer 2:\n");
-    consumer_print_details(&cons2);
+    printf("Consumer 1: %lu\n", counters[0]);
+    printf("Consumer 2: %lu\n", counters[1]);
 
     return;
 }
