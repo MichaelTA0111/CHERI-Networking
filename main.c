@@ -242,50 +242,83 @@ lcore_main(void)
 
             // Iterate through each packet received
             for (i = 0; i < nb_rx; i++) {
-                size_t read_len =  rte_pktmbuf_pkt_len(bufs[i]);
-                char *c = bufs[i]->buf_addr;
-                unsigned int j, k;
-
-                printf("\nBuffer %d: Address %p, Length %lu\n",
-                        i,
-                        bufs[i],
-                        read_len);
-                printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
-                        cheri_getperm(bufs[i]->buf_addr),
-                        bufs[i]->buf_addr,
-                        cheri_getlen(bufs[i]->buf_addr));
+                size_t read_len = 0;
+                char *c;
+		unsigned int j, k;
 
                 if (app_opts.process_type == 1) {
+ 	            struct rte_mbuf current_buf = *bufs[i];
+                    current_buf.buf_addr = cheri_setbounds(current_buf.buf_addr,
+		            current_buf.data_off + current_buf.data_len);
+                    current_buf.buf_addr = cheri_andperm(current_buf.buf_addr, ~CHERI_PERM_STORE);
+
+                    read_len = rte_pktmbuf_pkt_len(&current_buf);
+                    c = current_buf.buf_addr;
+
+		    printf("\nBuffer %d: Address %p, Length %lu\n",
+                            i,
+                            &current_buf,
+                            read_len);
+                    printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
+                            cheri_getperm(current_buf.buf_addr),
+                            current_buf.buf_addr,
+                            cheri_getlen(current_buf.buf_addr));
+
                     // Raise a permissions error
                     if (app_opts.permissions_error) {
                         printf("Attempting to write to read-only permissions.\n");
-                        c = cheri_andperm(c, ~CHERI_PERM_STORE);
                         *c = 0xFF; 
                     }
 
                     // Raise a bounds error
                     if (app_opts.bounds_error) {
-                        c = bufs[i]->buf_addr;
+                        c = current_buf.buf_addr;
                         printf("Attempting to read beyond capability bounds.\n");
                         read_len++;
                     }
-                }
+                    for (j = 0; j < ceil((double) read_len / 16.0); j++) {
+                        for (k = 0; k < 16; k++) {
+                            if (j*16+k < read_len) {
+                                printf("%02X ", c[current_buf.data_off + j*16+k]);
+                            } else {
+                                printf("   ");
+                            }
+                        }
+                        printf("| ");
+                        for (k = 0; k < 16; k++) {
+                            if (j*16+k < read_len) {
+                                printf("%c", c[current_buf.data_off + j*16+k]);
+                            }
+                        }
+                        printf("\n");
+                    }
+                } else if (app_opts.process_type == 2) {
+                    read_len =  rte_pktmbuf_pkt_len(bufs[i]);
+                    c = bufs[i]->buf_addr;
 
-                for (j = 0; j < ceil((double) read_len / 16.0); j++) {
-                    for (k = 0; k < 16; k++) {
-                        if (j*16+k < read_len) {
-                            printf("%02X ", c[bufs[i]->data_off + j*16+k]);
-                        } else {
-                            printf("   ");
+		    printf("\nBuffer %d: Address %p, Length %lu\n",
+                            i, &bufs[i]->buf_addr, read_len);
+                    printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
+                            cheri_getperm(bufs[i]->buf_addr),
+                            bufs[i]->buf_addr,
+                            cheri_getlen(bufs[i]->buf_addr));
+
+		    for (j = 0; j < ceil((double) read_len / 16.0); j++) {
+                        for (k = 0; k < 16; k++) {
+                            if (j*16+k < read_len) {
+                                printf("%02X ", c[bufs[i]->data_off + j*16+k]);
+                            } else {
+                                printf("   ");
+                            }
                         }
-                    }
-                    printf("| ");
-                    for (k = 0; k < 16; k++) {
-                        if (j*16+k < read_len) {
-                            printf("%c", c[bufs[i]->data_off + j*16+k]);
+                        printf("| ");
+                        for (k = 0; k < 16; k++) {
+                            if (j*16+k < read_len) {
+                                printf("%c", c[bufs[i]->data_off + j*16+k]);
+                            }
                         }
+                        printf("\n");
                     }
-                    printf("\n");
                 }
 
                 int odd_len = read_len % 2;
