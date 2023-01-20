@@ -18,7 +18,6 @@
 #include <math.h>
 
 #include "plugin.h"
-#include "consumer.h"
 
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
@@ -41,7 +40,6 @@ static struct {
 } app_opts;
 
 struct addrinfo *servinfo, *p1, *p2;
-Consumer cons1, cons2;
 
 typedef uint64_t tsc_t;
 static int tsc_dynfield_offset = -1;
@@ -294,10 +292,10 @@ lcore_main(void)
                 if (app_opts.process_type == 1) {
                     if (odd_len) {
                         printf("Updating odd consumer.\n");
-                        consumer_increment_counter(&cons1);
+                        plugin_consumer_interaction(1);
 		    } else {
                         printf("Updating even consumer.\n");
-                        consumer_increment_counter(&cons2);
+                        plugin_consumer_interaction(2);
                     }
                 } else if (app_opts.process_type == 2) {
                     int numbytes;
@@ -333,8 +331,8 @@ lcore_main(void)
 
     unsigned long counters[2];
     if (app_opts.process_type == 1) {
-        counters[0] = cons1.counter;
-        counters[1] = cons2.counter;
+        counters[0] = plugin_get_consumer_counter(1);
+        counters[1] = plugin_get_consumer_counter(2);
     } else if (app_opts.process_type == 2) {
         int numbytes;
         const char *msg = "FINISHED";
