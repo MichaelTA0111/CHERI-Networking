@@ -25,14 +25,13 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 10000
+#define MAXBUFLEN 500
 
 #define SRC_PORT_1 "4000"
 #define SRC_PORT_2 "4001"
 #define DST_PORT_1 "5000"
 #define DST_PORT_2 "5001"
 
-
-//void process_packet()
 
 static struct {
     int process_type;
@@ -335,6 +334,10 @@ lcore_main(void)
     if (app_opts.process_type == 2) {
         int numbytes;
         const char *msg = "FINISHED";
+        struct sockaddr_storage their_addr;
+        socklen_t addr_len;
+        char buf[MAXBUFLEN];
+
         printf("Closing consumer 1.\n");
         if ((numbytes = sendto(sockfd1, msg, strlen(msg),
                 0, p1->ai_addr, p1->ai_addrlen)) == -1) {
@@ -343,6 +346,23 @@ lcore_main(void)
         }
         printf("Sent %d bytes to consumer 1.\n", numbytes);
 
+	if ((sockfd1 = create_socket(SRC_PORT_1, &p1, 1)) < 0) {
+            printf("Error creating socket 1!\n");
+            return;
+        }
+
+        printf("Waiting for packet...\n");
+        addr_len = sizeof their_addr;
+        if ((numbytes = recvfrom(sockfd1, buf, MAXBUFLEN-1 , 0,
+                (struct sockaddr *)&their_addr, &addr_len)) == -1) {
+            perror("recvfrom");
+            exit(1);
+        }
+
+        buf[numbytes] = '\0';
+        printf("%s\n", buf);
+	cons1.counter = atoi(buf);
+
         printf("Closing consumer 2.\n");
         if ((numbytes = sendto(sockfd2, msg, strlen(msg),
                 0, p2->ai_addr, p2->ai_addrlen)) == -1) {
@@ -350,6 +370,23 @@ lcore_main(void)
             exit(1);
         }
         printf("Sent %d bytes to consumer 2.\n", numbytes);
+
+        if ((sockfd2 = create_socket(SRC_PORT_2, &p2, 1)) < 0) {
+            printf("Error creating socket 2!\n");
+            return;
+        }
+
+        printf("Waiting for packet...\n");
+        addr_len = sizeof their_addr;
+        if ((numbytes = recvfrom(sockfd2, buf, MAXBUFLEN-1 , 0,
+                (struct sockaddr *)&their_addr, &addr_len)) == -1) {
+            perror("recvfrom");
+            exit(1);
+        }
+
+        buf[numbytes] = '\0';
+        printf("%s\n", buf);
+	cons2.counter = atoi(buf);
     }
 
     freeaddrinfo(servinfo);
