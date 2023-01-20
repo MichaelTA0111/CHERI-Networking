@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <math.h>
 
+#include "plugin.h"
 #include "consumer.h"
 
 #define RX_RING_SIZE 1024
