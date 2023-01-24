@@ -321,36 +321,27 @@ lcore_main(void)
                     }
                 }
 
-                int odd_len = read_len % 2;
+                int consumer_id = c[bufs[i]->data_off] - 160;
+                printf("Updating consumer %i.\n", consumer_id);
                 if (app_opts.process_type == 1) {
-                    if (odd_len) {
-                        printf("Updating odd consumer.\n");
-                        plugin_consumer_interaction(1);
-		    } else {
-                        printf("Updating even consumer.\n");
-                        plugin_consumer_interaction(2);
-                    }
+                    plugin_consumer_interaction(consumer_id);
                 } else if (app_opts.process_type == 2) {
                     int numbytes;
-                    if (odd_len) {
-                        printf("Updating odd consumer.\n");
+		    if (!consumer_id) {
                         if ((numbytes = sendto(sockfd1, &c[bufs[i]->data_off], read_len,
                                 0, p1->ai_addr, p1->ai_addrlen)) == -1) {
                             perror("Error with sendto command");
                             exit(1);
                         }
+		    } else {
+                        if ((numbytes = sendto(sockfd2, &c[bufs[i]->data_off], read_len,
+                                0, p2->ai_addr, p2->ai_addrlen)) == -1) {
+                            perror("Error with sendto command");
+                            exit(1);
+                        }
+		    }
 
-                        printf("Sent %d bytes to consumer 1.\n", numbytes);
-                    } else {
-                        printf("Updating even consumer.\n");
-			if ((numbytes = sendto(sockfd2, &c[bufs[i]->data_off], read_len,
-				0, p2->ai_addr, p2->ai_addrlen)) == -1) {
-			    perror("Error with sendto command");
-			    exit(1);
-			}
-
-			printf("Sent %d bytes to consumer 2.\n", numbytes);
-                    }
+                    printf("Sent %d bytes to consumer.\n", numbytes);
 		}
             }
 
