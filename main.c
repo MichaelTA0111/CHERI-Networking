@@ -16,6 +16,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <math.h>
+#include <time.h>
 
 #include "plugin.h"
 
@@ -37,6 +38,7 @@ static struct {
     int process_type;
     int bounds_error;
     int permissions_error;
+    int print;
 } app_opts;
 
 struct addrinfo *servinfo, *p1, *p2;
@@ -60,6 +62,15 @@ static const struct rte_eth_conf port_conf_default = {
         .max_rx_pkt_len = RTE_ETHER_MAX_LEN,
     },
 };
+
+static long long
+get_current_time(void) {
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+
+    return (((long long)tv.tv_sec)*1000000)+(tv.tv_usec);
+}
 
 /*
  * Initialises a given port using global settings and with the rx buffers
@@ -131,12 +142,14 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
             port, rte_strerror(-retval));
         return retval;
     }
+    /*
     printf("Port %u MAC: %02"PRIx8" %02"PRIx8" %02"PRIx8
             " %02"PRIx8" %02"PRIx8" %02"PRIx8"\n",
             (unsigned)port,
             addr.addr_bytes[0], addr.addr_bytes[1],
             addr.addr_bytes[2], addr.addr_bytes[3],
             addr.addr_bytes[4], addr.addr_bytes[5]);
+    */
 
     retval = rte_eth_promiscuous_enable(port);
     if (retval != 0)
@@ -225,6 +238,8 @@ lcore_main(void)
 
     // Loop through all of the packets received
     int loop;
+    uint64_t start, stop, total_time;
+    start = get_current_time();
     for (loop = 0; !loop;) {
         RTE_ETH_FOREACH_DEV(port) {
             struct rte_mbuf *bufs[BURST_SIZE];
@@ -238,7 +253,7 @@ lcore_main(void)
 		break;
             }
 
-            printf("Got %d packets\n", nb_rx);
+            // printf("Got %d packets\n", nb_rx);
 
             // Iterate through each packet received
             for (i = 0; i < nb_rx; i++) {
@@ -255,14 +270,16 @@ lcore_main(void)
                     read_len = rte_pktmbuf_pkt_len(&current_buf);
                     c = current_buf.buf_addr;
 
-		    printf("\nBuffer %d: Address %p, Length %lu\n",
-                            i,
-                            &current_buf,
-                            read_len);
-                    printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
-                            cheri_getperm(current_buf.buf_addr),
-                            current_buf.buf_addr,
-                            cheri_getlen(current_buf.buf_addr));
+                    if (app_opts.print) {
+		        printf("\nBuffer %d: Address %p, Length %lu\n",
+                                i,
+                                &current_buf,
+                                read_len);
+                        printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
+                                cheri_getperm(current_buf.buf_addr),
+                                current_buf.buf_addr,
+                                cheri_getlen(current_buf.buf_addr));
+		    }
 
                     // Raise a permissions error
                     if (app_opts.permissions_error) {
@@ -276,53 +293,58 @@ lcore_main(void)
                         printf("Attempting to read beyond capability bounds.\n");
                         read_len++;
                     }
-                    for (j = 0; j < ceil((double) read_len / 16.0); j++) {
-                        for (k = 0; k < 16; k++) {
-                            if (j*16+k < read_len) {
-                                printf("%02X ", c[current_buf.data_off + j*16+k]);
-                            } else {
-                                printf("   ");
+
+		    if (app_opts.print) {
+                        for (j = 0; j < ceil((double) read_len / 16.0); j++) {
+                            for (k = 0; k < 16; k++) {
+                                if (j*16+k < read_len) {
+                                    printf("%02X ", c[current_buf.data_off + j*16+k]);
+                                } else {
+                                    printf("   ");
+                                }
                             }
-                        }
-                        printf("| ");
-                        for (k = 0; k < 16; k++) {
-                            if (j*16+k < read_len) {
-                                printf("%c", c[current_buf.data_off + j*16+k]);
+                            printf("| ");
+                            for (k = 0; k < 16; k++) {
+                                if (j*16+k < read_len) {
+                                    printf("%c", c[current_buf.data_off + j*16+k]);
+                                }
                             }
+                            printf("\n");
                         }
-                        printf("\n");
-                    }
+		    }
                 } else if (app_opts.process_type == 2) {
                     read_len =  rte_pktmbuf_pkt_len(bufs[i]);
                     c = bufs[i]->buf_addr;
 
-		    printf("\nBuffer %d: Address %p, Length %lu\n",
-                            i, &bufs[i]->buf_addr, read_len);
-                    printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
-                            cheri_getperm(bufs[i]->buf_addr),
-                            bufs[i]->buf_addr,
-                            cheri_getlen(bufs[i]->buf_addr));
+                    if (app_opts.print) {
+		        printf("\nBuffer %d: Address %p, Length %lu\n",
+                                i, &bufs[i]->buf_addr, read_len);
+                        printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
+                                cheri_getperm(bufs[i]->buf_addr),
+                                bufs[i]->buf_addr,
+                                cheri_getlen(bufs[i]->buf_addr));
 
-		    for (j = 0; j < ceil((double) read_len / 16.0); j++) {
-                        for (k = 0; k < 16; k++) {
-                            if (j*16+k < read_len) {
-                                printf("%02X ", c[bufs[i]->data_off + j*16+k]);
-                            } else {
-                                printf("   ");
+		        for (j = 0; j < ceil((double) read_len / 16.0); j++) {
+                            for (k = 0; k < 16; k++) {
+                                if (j*16+k < read_len) {
+                                    printf("%02X ", c[bufs[i]->data_off + j*16+k]);
+                                } else {
+                                    printf("   ");
+                                }
                             }
-                        }
-                        printf("| ");
-                        for (k = 0; k < 16; k++) {
-                            if (j*16+k < read_len) {
-                                printf("%c", c[bufs[i]->data_off + j*16+k]);
+                            printf("| ");
+                            for (k = 0; k < 16; k++) {
+                                if (j*16+k < read_len) {
+                                    printf("%c", c[bufs[i]->data_off + j*16+k]);
+                                }
                             }
-                        }
-                        printf("\n");
+                            printf("\n");
+			}
                     }
                 }
 
                 int consumer_id = c[bufs[i]->data_off] - 160;
-                printf("Updating consumer %i.\n", consumer_id);
+                // printf("Updating consumer %i.\n", consumer_id);
                 if (app_opts.process_type == 1) {
                     plugin_consumer_interaction(consumer_id);
                 } else if (app_opts.process_type == 2) {
@@ -341,7 +363,7 @@ lcore_main(void)
                         }
 		    }
 
-                    printf("Sent %d bytes to consumer.\n", numbytes);
+                    // printf("Sent %d bytes to consumer.\n", numbytes);
 		}
             }
 
@@ -352,6 +374,9 @@ lcore_main(void)
             }
         }
     }
+    stop = get_current_time();
+    total_time = stop - start;
+    printf("Packet processing time: %lu\n", total_time);
 
     unsigned long counters[2];
     if (app_opts.process_type == 1) {
@@ -513,6 +538,9 @@ main(int argc, char *argv[])
             printf(usage, argv[0]);
             return -1;
         }
+
+    // TODO: Add toggle for printing response
+    app_opts.print = 0;
 
     optind = 1; /* reset getopt lib */
     nb_ports = rte_eth_dev_count_avail();
