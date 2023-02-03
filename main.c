@@ -389,20 +389,20 @@ lcore_main(void)
         socklen_t addr_len;
         char buf[MAXBUFLEN];
 
-        printf("Closing consumer 1.\n");
+        // printf("Closing consumer 1.\n");
         if ((numbytes = sendto(sockfd1, msg, strlen(msg),
                 0, p1->ai_addr, p1->ai_addrlen)) == -1) {
             perror("Error with sendto command");
             exit(1);
         }
-        printf("Sent %d bytes to consumer 1.\n", numbytes);
+        // printf("Sent %d bytes to consumer 1.\n", numbytes);
 
 	if ((sockfd1 = create_socket(SRC_PORT_1, &p1, 1)) < 0) {
             printf("Error creating socket 1!\n");
             return;
         }
 
-        printf("Waiting for packet...\n");
+        // printf("Waiting for packet...\n");
         addr_len = sizeof their_addr;
         if ((numbytes = recvfrom(sockfd1, buf, MAXBUFLEN-1 , 0,
                 (struct sockaddr *)&their_addr, &addr_len)) == -1) {
@@ -411,23 +411,23 @@ lcore_main(void)
         }
 
         buf[numbytes] = '\0';
-        printf("%s\n", buf);
+        // printf("%s\n", buf);
 	counters[0] = atoi(buf);
 
-        printf("Closing consumer 2.\n");
+        // printf("Closing consumer 2.\n");
         if ((numbytes = sendto(sockfd2, msg, strlen(msg),
                 0, p2->ai_addr, p2->ai_addrlen)) == -1) {
             perror("Error with sendto command");
             exit(1);
         }
-        printf("Sent %d bytes to consumer 2.\n", numbytes);
+        // printf("Sent %d bytes to consumer 2.\n", numbytes);
 
         if ((sockfd2 = create_socket(SRC_PORT_2, &p2, 1)) < 0) {
             printf("Error creating socket 2!\n");
             return;
         }
 
-        printf("Waiting for packet...\n");
+        // printf("Waiting for packet...\n");
         addr_len = sizeof their_addr;
         if ((numbytes = recvfrom(sockfd2, buf, MAXBUFLEN-1 , 0,
                 (struct sockaddr *)&their_addr, &addr_len)) == -1) {
@@ -436,7 +436,7 @@ lcore_main(void)
         }
 
         buf[numbytes] = '\0';
-        printf("%s\n", buf);
+        // printf("%s\n", buf);
 	counters[1] = atoi(buf);
 
         freeaddrinfo(servinfo);
