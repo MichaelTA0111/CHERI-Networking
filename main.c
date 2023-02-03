@@ -51,6 +51,8 @@ static const char short_opts[] =
     "i"    /* Use IPC model */
     "x"    /* Raise capability bounds error */
     "y"    /* Raise capability permissions error */
+    "q"    /* Run in quiet mode */
+    "v"    /* Run in verbose mode */
     ;
 
 static const char usage[] =
@@ -142,14 +144,6 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
             port, rte_strerror(-retval));
         return retval;
     }
-    /*
-    printf("Port %u MAC: %02"PRIx8" %02"PRIx8" %02"PRIx8
-            " %02"PRIx8" %02"PRIx8" %02"PRIx8"\n",
-            (unsigned)port,
-            addr.addr_bytes[0], addr.addr_bytes[1],
-            addr.addr_bytes[2], addr.addr_bytes[3],
-            addr.addr_bytes[4], addr.addr_bytes[5]);
-    */
 
     retval = rte_eth_promiscuous_enable(port);
     if (retval != 0)
@@ -185,13 +179,13 @@ create_socket(const char *port, struct addrinfo **p, int do_bind) {
             continue;
         }
 
-	if (do_bind) {
+        if (do_bind) {
             if (bind(sockfd, q->ai_addr, q->ai_addrlen) == -1) {
                 close(sockfd);
                 perror("Error binding");
                 continue;
-	    }	
-	}
+            }        
+        }
         break;
     }
 
@@ -240,7 +234,7 @@ lcore_main(void)
     int loop;
     uint64_t start, stop, total_time;
     start = get_current_time();
-    for (loop = 0; !loop;) {
+    for (loop = 1; loop;) {
         RTE_ETH_FOREACH_DEV(port) {
             struct rte_mbuf *bufs[BURST_SIZE];
             const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
@@ -248,30 +242,32 @@ lcore_main(void)
 
             // Stop looping once no packets remain
             if (unlikely(!nb_rx)) {
-                printf("Received all packets successfully!\n");
-                loop = 1;
-		break;
+                if (app_opts.print)
+                    printf("Received all packets successfully!\n");
+                loop = 0;
+                break;
             }
 
-            // printf("Got %d packets\n", nb_rx);
+            if (app_opts.print)
+                printf("Got %d packets\n", nb_rx);
 
             // Iterate through each packet received
             for (i = 0; i < nb_rx; i++) {
                 size_t read_len = 0;
                 char *c;
-		unsigned int j, k;
+                unsigned int j, k;
 
                 if (app_opts.process_type == 1) {
- 	            struct rte_mbuf current_buf = *bufs[i];
+                    struct rte_mbuf current_buf = *bufs[i];
                     current_buf.buf_addr = cheri_setbounds(current_buf.buf_addr,
-		            current_buf.data_off + current_buf.data_len);
+                            current_buf.data_off + current_buf.data_len);
                     current_buf.buf_addr = cheri_andperm(current_buf.buf_addr, ~CHERI_PERM_STORE);
 
                     read_len = rte_pktmbuf_pkt_len(&current_buf);
                     c = current_buf.buf_addr;
 
                     if (app_opts.print) {
-		        printf("\nBuffer %d: Address %p, Length %lu\n",
+                        printf("\nBuffer %d: Address %p, Length %lu\n",
                                 i,
                                 &current_buf,
                                 read_len);
@@ -279,7 +275,7 @@ lcore_main(void)
                                 cheri_getperm(current_buf.buf_addr),
                                 current_buf.buf_addr,
                                 cheri_getlen(current_buf.buf_addr));
-		    }
+                    }
 
                     // Raise a permissions error
                     if (app_opts.permissions_error) {
@@ -294,7 +290,7 @@ lcore_main(void)
                         read_len++;
                     }
 
-		    if (app_opts.print) {
+                    if (app_opts.print == 2) {
                         for (j = 0; j < ceil((double) read_len / 16.0); j++) {
                             for (k = 0; k < 16; k++) {
                                 if (j*16+k < read_len) {
@@ -311,20 +307,22 @@ lcore_main(void)
                             }
                             printf("\n");
                         }
-		    }
+                    }
                 } else if (app_opts.process_type == 2) {
                     read_len =  rte_pktmbuf_pkt_len(bufs[i]);
                     c = bufs[i]->buf_addr;
 
                     if (app_opts.print) {
-		        printf("\nBuffer %d: Address %p, Length %lu\n",
+                        printf("\nBuffer %d: Address %p, Length %lu\n",
                                 i, &bufs[i]->buf_addr, read_len);
                         printf("Capability: Permissions 0x%lX, Address %p, Length %lu\n",
                                 cheri_getperm(bufs[i]->buf_addr),
                                 bufs[i]->buf_addr,
                                 cheri_getlen(bufs[i]->buf_addr));
+                    }
 
-		        for (j = 0; j < ceil((double) read_len / 16.0); j++) {
+                    if (app_opts.print == 2) {
+                        for (j = 0; j < ceil((double) read_len / 16.0); j++) {
                             for (k = 0; k < 16; k++) {
                                 if (j*16+k < read_len) {
                                     printf("%02X ", c[bufs[i]->data_off + j*16+k]);
@@ -339,32 +337,35 @@ lcore_main(void)
                                 }
                             }
                             printf("\n");
-			}
+                        }
                     }
                 }
 
                 int consumer_id = c[bufs[i]->data_off] - 160;
-                // printf("Updating consumer %i.\n", consumer_id);
+                if (app_opts.print)
+                    printf("Updating consumer %i.\n", consumer_id);
+
                 if (app_opts.process_type == 1) {
                     plugin_consumer_interaction(consumer_id);
                 } else if (app_opts.process_type == 2) {
                     int numbytes;
-		    if (!consumer_id) {
+                    if (!consumer_id) {
                         if ((numbytes = sendto(sockfd1, &c[bufs[i]->data_off], read_len,
                                 0, p1->ai_addr, p1->ai_addrlen)) == -1) {
                             perror("Error with sendto command");
                             exit(1);
                         }
-		    } else {
+                    } else {
                         if ((numbytes = sendto(sockfd2, &c[bufs[i]->data_off], read_len,
                                 0, p2->ai_addr, p2->ai_addrlen)) == -1) {
                             perror("Error with sendto command");
                             exit(1);
                         }
-		    }
+                    }
 
-                    // printf("Sent %d bytes to consumer.\n", numbytes);
-		}
+                    if (app_opts.print)
+                        printf("Sent %d bytes to consumer.\n", numbytes);
+                }
             }
 
             if (nb_rx) {
@@ -389,20 +390,23 @@ lcore_main(void)
         socklen_t addr_len;
         char buf[MAXBUFLEN];
 
-        // printf("Closing consumer 1.\n");
+        if (app_opts.print)
+            printf("Closing consumer 1.\n");
         if ((numbytes = sendto(sockfd1, msg, strlen(msg),
                 0, p1->ai_addr, p1->ai_addrlen)) == -1) {
             perror("Error with sendto command");
             exit(1);
         }
-        // printf("Sent %d bytes to consumer 1.\n", numbytes);
+        if (app_opts.print)
+            printf("Sent %d bytes to consumer 1.\n", numbytes);
 
-	if ((sockfd1 = create_socket(SRC_PORT_1, &p1, 1)) < 0) {
+        if ((sockfd1 = create_socket(SRC_PORT_1, &p1, 1)) < 0) {
             printf("Error creating socket 1!\n");
             return;
         }
 
-        // printf("Waiting for packet...\n");
+        if (app_opts.print)
+            printf("Waiting for packet...\n");
         addr_len = sizeof their_addr;
         if ((numbytes = recvfrom(sockfd1, buf, MAXBUFLEN-1 , 0,
                 (struct sockaddr *)&their_addr, &addr_len)) == -1) {
@@ -411,23 +415,25 @@ lcore_main(void)
         }
 
         buf[numbytes] = '\0';
-        // printf("%s\n", buf);
-	counters[0] = atoi(buf);
+        counters[0] = atoi(buf);
 
-        // printf("Closing consumer 2.\n");
+        if (app_opts.print)
+            printf("Closing consumer 2.\n");
         if ((numbytes = sendto(sockfd2, msg, strlen(msg),
                 0, p2->ai_addr, p2->ai_addrlen)) == -1) {
             perror("Error with sendto command");
             exit(1);
         }
-        // printf("Sent %d bytes to consumer 2.\n", numbytes);
+        if (app_opts.print)
+            printf("Sent %d bytes to consumer 2.\n", numbytes);
 
         if ((sockfd2 = create_socket(SRC_PORT_2, &p2, 1)) < 0) {
             printf("Error creating socket 2!\n");
             return;
         }
 
-        // printf("Waiting for packet...\n");
+        if (app_opts.print)
+            printf("Waiting for packet...\n");
         addr_len = sizeof their_addr;
         if ((numbytes = recvfrom(sockfd2, buf, MAXBUFLEN-1 , 0,
                 (struct sockaddr *)&their_addr, &addr_len)) == -1) {
@@ -436,8 +442,7 @@ lcore_main(void)
         }
 
         buf[numbytes] = '\0';
-        // printf("%s\n", buf);
-	counters[1] = atoi(buf);
+        counters[1] = atoi(buf);
 
         freeaddrinfo(servinfo);
     }
@@ -460,8 +465,12 @@ main(int argc, char *argv[])
         { "InterProc",  no_argument,    NULL,    'i' },
         { "Bounds",     no_argument,    NULL,    'x' },
         { "Permissions",no_argument,    NULL,    'y' },
+        { "Quiet",      no_argument,    NULL,    'q' },
+        { "Verbose",    no_argument,    NULL,    'v' },
     };
     int opt, option_index;
+
+    app_opts.print = 1;
 
     /* Check for environment variables */
     char *single_proc = getenv("PYTILIA_SINGLE_PROCESS");
@@ -489,6 +498,21 @@ main(int argc, char *argv[])
     if (permissions && (strcasecmp(permissions, "yes") == 0)) {
         printf("Raise a capability permissions error.\n");
         app_opts.permissions_error = 1;
+    }
+
+    char *quiet = getenv("PYTILIA_QUIET");
+    if (quiet && (strcasecmp(quiet, "yes") == 0)) {
+        printf("Selected quiet mode.\n");
+        app_opts.print = 0;
+    }
+
+    char *verbose = getenv("PYTILIA_VERBOSE");
+    if (verbose && (strcasecmp(verbose, "yes") == 0)) {
+        if (app_opts.print != 1)
+            printf("WARNING! Overwriting print type!\n");
+
+        printf("Selected verbose mode.\n");
+        app_opts.print = 2;
     }
 
     static const struct rte_mbuf_dynfield tsc_dynfield_desc = {
@@ -534,13 +558,24 @@ main(int argc, char *argv[])
             printf("Raise a capability permissions error.\n");
             app_opts.permissions_error = 1;
             break;
+        case 'q':
+            if (app_opts.print != 1)
+                printf("WARNING! Overwriting print type!\n");
+
+            printf("Selected quiet mode.\n");
+            app_opts.print = 0;
+            break;
+        case 'v':
+            if (app_opts.print != 1)
+                printf("WARNING! Overwriting print type!\n");
+
+            printf("Selected verbose mode.\n");
+            app_opts.print = 2;
+            break;
         default:
             printf(usage, argv[0]);
             return -1;
         }
-
-    // TODO: Add toggle for printing response
-    app_opts.print = 0;
 
     optind = 1; /* reset getopt lib */
     nb_ports = rte_eth_dev_count_avail();
