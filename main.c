@@ -65,6 +65,9 @@ static const struct rte_eth_conf port_conf_default = {
     },
 };
 
+/*
+ * Get the current time in microseconds
+ */
 static long long
 get_current_time(void) {
     struct timeval tv;
