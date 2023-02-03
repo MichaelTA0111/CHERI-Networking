@@ -13,7 +13,9 @@ The project folder should be placed inside DPDK examples folder.
 
 Add `cheri_networking` to the `meson_options.txt` file in the `examples` option.
 
+Rebuild DPDK and this will appear in the `examples` subfolder of your `meson` build directory.
 
-### Operation
+
+### Usage
 
 To be completed...
