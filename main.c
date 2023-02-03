@@ -254,7 +254,7 @@ lcore_main(void)
             // Iterate through each packet received
             for (i = 0; i < nb_rx; i++) {
                 size_t read_len = 0;
-                char *c;
+                char *c = NULL;
                 unsigned int j, k;
 
                 if (app_opts.process_type == 1) {
@@ -290,7 +290,7 @@ lcore_main(void)
                         read_len++;
                     }
 
-                    if (app_opts.print == 2) {
+                    if (app_opts.print == 2 || app_opts.bounds_error) {
                         for (j = 0; j < ceil((double) read_len / 16.0); j++) {
                             for (k = 0; k < 16; k++) {
                                 if (j*16+k < read_len) {
