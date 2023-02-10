@@ -1,6 +1,7 @@
 #!/usr/local64/bin/bash
 
-build_dir_name=$1
+iterations=$1
+build_dir_name=$2
 
 # Get the script and parent DPDK directories
 script_dir="$(dirname "${BASH_SOURCE[0]}")"
@@ -20,7 +21,7 @@ fi
 for PACKET_SIZE in '512' '1_024' '2_048' '4_096' '8_192'
 do
     # Repeat all results 5 times for reliability
-    for i in {1..5}
+    for (( i=1;i<=$iterations;i++ ))
     do
         python3 "$script_dir"/record_metrics.py $build_dir_name $PACKET_SIZE '100_000' 2 sq packet_size
         sleep 1

@@ -1,7 +1,8 @@
 #!/usr/local64/bin/bash
 
-build_dir_name=$1
-packet_receiver_dir=$2
+iterations=$1
+build_dir_name=$2
+packet_receiver_dir=$3
 
 # Get the script and parent DPDK directories
 script_dir="$(dirname "${BASH_SOURCE[0]}")"
@@ -21,7 +22,7 @@ fi
 for PACKET_COUNT in '20_000' '40_000' '60_000' '80_000' '100_000' '120_000' '140_000' '160_000' '180_000' '200_000'
 do
     # Repeat all results 5 times for reliability
-    for i in {1..5}
+    for (( i=1;i<=$iterations;i++ ))
     do
         "$packet_receiver_dir"/application.o 0 -q &
         "$packet_receiver_dir"/application.o 1 -q &
