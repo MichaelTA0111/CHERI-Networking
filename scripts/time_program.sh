@@ -40,4 +40,4 @@ for (( i=0; i<${#opts}; i++ )); do
     fi
 done
 
-time ("$build_dir"/examples/dpdk-cheri_networking -l 0 -n 4 --no-huge --no-shconf --vdev=net_pcap0,rx_pcap=packet_streams/"$packet_stream",tx_pcap=packet_streams/out.pcap -- -"$opts" &> /dev/null)
+time ("$build_dir"/examples/dpdk-cheri_networking -l 0 -n 4 --no-huge --no-shconf --vdev=net_pcap0,rx_pcap=packet_streams/"$packet_stream",tx_pcap=packet_streams/out.pcap -- -"$opts" 2> /dev/null)
