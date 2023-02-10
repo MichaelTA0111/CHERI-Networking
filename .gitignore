@@ -51,5 +51,8 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
+# JetBrains IDE
+.idea
+
 # Performance metrics results from scripts
 results
