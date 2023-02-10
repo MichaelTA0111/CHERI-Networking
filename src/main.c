@@ -25,7 +25,7 @@
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 10000
+#define BURST_SIZE 1000
 #define MAXBUFLEN 500
 
 #define SRC_PORT_1 "4000"
