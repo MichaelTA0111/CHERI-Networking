@@ -6,11 +6,8 @@
 # To build this example as a standalone application with an already-installed
 # DPDK instance, use 'make'
 
-#rte_eth_read_clock is experimental
-allow_experimental_apis = true
-
 sources = files(
-	 'main.c',
-	 'consumer.c',
-	 'plugin.c'
+	 'src/main.c',
+	 'src/consumer.c',
+	 'src/plugin.c'
 )
