@@ -62,6 +62,9 @@ def main(build_dir_name, packet_size, packet_count, consumer_count, options,
 
     results_dir = os.path.abspath(results_dir)
 
+    # Make the results directory in case it doesn't exist already
+    os.makedirs(results_dir, exist_ok=True)
+
     # Write the results to the associated output file
     with open(f'{results_dir}/{stream}.txt', 'a') as f:
         f.write(f'{time},{avg_latency:.2f},{usage}\n')
