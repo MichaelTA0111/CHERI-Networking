@@ -54,5 +54,8 @@ dkms.conf
 # JetBrains IDE
 .idea
 
+# .core files
+*.core
+
 # Performance metrics results from scripts
 results
