@@ -20,6 +20,7 @@ fi
 # Iterate through all available packet counts
 for PACKET_COUNT in '20_000' '40_000' '60_000' '80_000' '100_000' '120_000' '140_000' '160_000' '180_000' '200_000'
 do
+    printf "Varying packet count (CHERI), current count %s\n" $PACKET_COUNT
     # Repeat all results 5 times for reliability
     for (( i=1;i<=$iterations;i++ ))
     do

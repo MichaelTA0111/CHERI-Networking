@@ -20,6 +20,7 @@ fi
 # Iterate through all available packet sizes
 for PACKET_SIZE in '512' '1_024' '2_048' '4_096' '8_192'
 do
+    printf "Varying packet size (No processing), current size %s B\n" $PACKET_SIZE
     # Repeat all results 5 times for reliability
     for (( i=1;i<=$iterations;i++ ))
     do
