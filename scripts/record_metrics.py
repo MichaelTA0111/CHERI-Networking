@@ -42,7 +42,7 @@ def main(build_dir_name, packet_size, packet_count, consumer_count, options,
     # Parse the execution time
     time = str(result.stderr)
     time = time.split('\\n')
-    real_time = time[-3]
+    real_time = time[-4]
     real_time = real_time.split('\\t')[1]
 
     # Determine the results directory
