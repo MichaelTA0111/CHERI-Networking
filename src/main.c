@@ -47,6 +47,7 @@ typedef uint64_t tsc_t;
 static int tsc_dynfield_offset = -1;
 
 static const char short_opts[] =
+    "n"    /* No packet processing, only read to and clear buffers */
     "s"    /* Use single CHERI secured process */
     "i"    /* Use IPC model */
     "x"    /* Raise capability bounds error */
@@ -344,30 +345,32 @@ lcore_main(void)
                     }
                 }
 
-                int consumer_id = c[bufs[i]->data_off] - 160;
-                if (app_opts.print)
-                    printf("Updating consumer %i.\n", consumer_id);
-
-                if (app_opts.process_type == 1) {
-                    plugin_consumer_interaction(consumer_id);
-                } else if (app_opts.process_type == 2) {
-                    int numbytes;
-                    if (!consumer_id) {
-                        if ((numbytes = sendto(sockfd1, &c[bufs[i]->data_off], read_len,
-                                0, p1->ai_addr, p1->ai_addrlen)) == -1) {
-                            perror("Error with sendto command");
-                            exit(1);
-                        }
-                    } else {
-                        if ((numbytes = sendto(sockfd2, &c[bufs[i]->data_off], read_len,
-                                0, p2->ai_addr, p2->ai_addrlen)) == -1) {
-                            perror("Error with sendto command");
-                            exit(1);
-                        }
-                    }
-
+                if (app_opts.process_type < 3) {
+                    int consumer_id = c[bufs[i]->data_off] - 160;
                     if (app_opts.print)
-                        printf("Sent %d bytes to consumer.\n", numbytes);
+                        printf("Updating consumer %i.\n", consumer_id);
+
+                    if (app_opts.process_type == 1) {
+                        plugin_consumer_interaction(consumer_id);
+                    } else if (app_opts.process_type == 2) {
+                        int numbytes;
+                        if (!consumer_id) {
+                            if ((numbytes = sendto(sockfd1, &c[bufs[i]->data_off], read_len,
+                                    0, p1->ai_addr, p1->ai_addrlen)) == -1) {
+                                perror("Error with sendto command");
+                                exit(1);
+                            }
+                        } else {
+                            if ((numbytes = sendto(sockfd2, &c[bufs[i]->data_off], read_len,
+                                    0, p2->ai_addr, p2->ai_addrlen)) == -1) {
+                                perror("Error with sendto command");
+                                exit(1);
+                            }
+                        }
+
+                        if (app_opts.print)
+                            printf("Sent %d bytes to consumer.\n", numbytes);
+                    }
                 }
             }
 
@@ -448,6 +451,9 @@ lcore_main(void)
         counters[1] = atoi(buf);
 
         freeaddrinfo(servinfo);
+    } else if (app_opts.process_type == 3) {
+        counters[0] = plugin_get_consumer_counter(1);
+        counters[1] = plugin_get_consumer_counter(2);
     }
 
     printf("Consumer 1: %lu\n", counters[0]);
@@ -464,6 +470,7 @@ main(int argc, char *argv[])
     uint16_t nb_ports, portid;
     struct option lgopts[] = {
         { NULL,         no_argument,    0,       0 },
+        { "NoProc",     no_argument,    NULL,    'n' },
         { "SingleProc", no_argument,    NULL,    's' },
         { "InterProc",  no_argument,    NULL,    'i' },
         { "Bounds",     no_argument,    NULL,    'x' },
@@ -489,6 +496,15 @@ main(int argc, char *argv[])
 
         printf("Use inter process communications.\n");
         app_opts.process_type = 2;
+    }
+
+    char *no_proc = getenv("PYTILIA_NO_PROCESS");
+    if (no_proc && (strcasecmp(no_proc, "yes") == 0)) {
+        if (app_opts.process_type)
+            printf("WARNING! Overwriting process type!\n");
+
+        printf("Don't process packets.\n");
+        app_opts.process_type = 3;
     }
 
     char *bounds = getenv("PYTILIA_BOUNDS_ERROR");
@@ -550,6 +566,14 @@ main(int argc, char *argv[])
 
             printf("Use inter process communications.\n");
             app_opts.process_type = 2;
+            break;
+        case 'n':
+        /** No Processing **/
+            if (app_opts.process_type)
+                printf("WARNING! Overwriting process type!\n");
+
+            printf("Don't process packets.\n");
+            app_opts.process_type = 3;
             break;
         case 'x':
         /** Bounds Error **/
