@@ -67,7 +67,7 @@ def main(build_dir_name, packet_size, packet_count, consumer_count, options,
 
     # Write the results to the associated output file
     with open(f'{results_dir}/{stream}.txt', 'a') as f:
-        f.write(f'{time},{avg_latency:.2f},{usage}\n')
+        f.write(f'{real_time},{avg_latency:.2f},{usage}\n')
 
 
 if __name__ == '__main__':
