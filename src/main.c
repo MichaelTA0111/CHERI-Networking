@@ -219,7 +219,8 @@ lcore_main(void)
             printf("WARNING, port %u is on remote NUMA node to polling thread."
                     "\n\tPerformance will not be optimal.\n", port);
 
-    printf("\nCore %u forwarding packets.\n", rte_lcore_id());
+    if (app_opts.print)
+        printf("\nCore %u forwarding packets.\n", rte_lcore_id());
 
     // Create sockets
     if (app_opts.process_type == 2) { 
@@ -485,52 +486,36 @@ main(int argc, char *argv[])
     /* Check for environment variables */
     char *single_proc = getenv("PYTILIA_SINGLE_PROCESS");
     if (single_proc && (strcasecmp(single_proc, "yes") == 0)) {
-        printf("Use single process.\n");
         app_opts.process_type = 1;
     }
 
     char *inter_proc = getenv("PYTILIA_INTER_PROCESS");
     if (inter_proc && (strcasecmp(inter_proc, "yes") == 0)) {
-        if (app_opts.process_type)
-            printf("WARNING! Overwriting process type!\n");
-
-        printf("Use inter process communications.\n");
         app_opts.process_type = 2;
     }
 
     char *no_proc = getenv("PYTILIA_NO_PROCESS");
     if (no_proc && (strcasecmp(no_proc, "yes") == 0)) {
-        if (app_opts.process_type)
-            printf("WARNING! Overwriting process type!\n");
-
-        printf("Don't process packets.\n");
         app_opts.process_type = 3;
     }
 
     char *bounds = getenv("PYTILIA_BOUNDS_ERROR");
     if (bounds && (strcasecmp(bounds, "yes") == 0)) {
-        printf("Raise a capability bounds error.\n");
         app_opts.bounds_error = 1;
     }
 
     char *permissions = getenv("PYTILIA_PERMISSIONS_ERROR");
     if (permissions && (strcasecmp(permissions, "yes") == 0)) {
-        printf("Raise a capability permissions error.\n");
         app_opts.permissions_error = 1;
     }
 
     char *quiet = getenv("PYTILIA_QUIET");
     if (quiet && (strcasecmp(quiet, "yes") == 0)) {
-        printf("Selected quiet mode.\n");
         app_opts.print = 0;
     }
 
     char *verbose = getenv("PYTILIA_VERBOSE");
     if (verbose && (strcasecmp(verbose, "yes") == 0)) {
-        if (app_opts.print != 1)
-            printf("WARNING! Overwriting print type!\n");
-
-        printf("Selected verbose mode.\n");
         app_opts.print = 2;
     }
 
@@ -553,50 +538,30 @@ main(int argc, char *argv[])
         switch (opt) {
         case 's':
         /** Single Process **/
-            if (app_opts.process_type)
-                printf("WARNING! Overwriting process type!\n");
-
-            printf("Use single process.\n");
             app_opts.process_type = 1;
             break;
         case 'i':
         /** Inter Process **/
-            if (app_opts.process_type)
-                printf("WARNING! Overwriting process type!\n");
-
-            printf("Use inter process communications.\n");
             app_opts.process_type = 2;
             break;
         case 'n':
         /** No Processing **/
-            if (app_opts.process_type)
-                printf("WARNING! Overwriting process type!\n");
-
-            printf("Don't process packets.\n");
             app_opts.process_type = 3;
             break;
         case 'x':
         /** Bounds Error **/
-            printf("Raise a capability bounds error.\n");
             app_opts.bounds_error = 1;
             break;
         case 'y':
         /** Permissions Error **/
-            printf("Raise a capability permissions error.\n");
             app_opts.permissions_error = 1;
             break;
         case 'q':
-            if (app_opts.print != 1)
-                printf("WARNING! Overwriting print type!\n");
-
-            printf("Selected quiet mode.\n");
+        /** Quiet Output **/
             app_opts.print = 0;
             break;
         case 'v':
-            if (app_opts.print != 1)
-                printf("WARNING! Overwriting print type!\n");
-
-            printf("Selected verbose mode.\n");
+        /** Verbose Output **/
             app_opts.print = 2;
             break;
         default:
@@ -604,9 +569,35 @@ main(int argc, char *argv[])
             return -1;
         }
 
+    if (!app_opts.process_type) {
+        printf("ERROR! No process type selected!");
+        return 1;
+    }
+
+    if (app_opts.print) {
+        if (app_opts.process_type == 1) {
+            printf("Selected single, CHERI process.\n");
+
+            if (app_opts.bounds_error) {
+                printf("Raise a capability bounds error.\n");
+            } else if (app_opts.permissions_error) {
+                printf("Raise a capability permissions error.\n");
+            }
+        } else if (app_opts.process_type == 2) {
+            printf("Selected inter-process communications.\n");
+        } else if (app_opts.process_type == 3) {
+            printf("Selected no packet processing.\n");
+        }
+        if (app_opts.print == 2) {
+            printf("Verbose output selected.\n");
+        }
+    }
+
     optind = 1; /* reset getopt lib */
+
     nb_ports = rte_eth_dev_count_avail();
-    printf("Port count %u\n", nb_ports);
+    if (app_opts.print)
+        printf("Port count %u\n", nb_ports);
 
     mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", 13400, MBUF_CACHE_SIZE, 0,
         RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
@@ -622,7 +613,7 @@ main(int argc, char *argv[])
         if (port_init(portid, mbuf_pool) != 0)
             rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8"\n", portid);
 
-    if (rte_lcore_count() > 1)
+    if (rte_lcore_count() > 1 && app_opts.print)
         printf("\nWARNING: Too many enabled lcores - App uses only 1 lcore\n");
 
     /* call lcore_main on main core only */
