@@ -57,5 +57,8 @@ dkms.conf
 # .core files
 *.core
 
+# cscope files
+cscope.out
+
 # Performance metrics results from scripts
 results
