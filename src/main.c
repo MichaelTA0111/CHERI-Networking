@@ -384,7 +384,7 @@ lcore_main(void)
     }
     stop = get_current_time();
     total_time = stop - start;
-    printf("Packet processing time: %lu\n", total_time);
+    printf("Total packet processing time (us): %lu\n", total_time);
 
     unsigned long counters[2];
     if (app_opts.process_type == 1) {
